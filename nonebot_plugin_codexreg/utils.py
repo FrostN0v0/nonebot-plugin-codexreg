@@ -32,14 +32,16 @@ def decode_jwt_payload(token):
         return {}
 
 
-def generate_password(length=14):
-    lower = string.ascii_lowercase
-    upper = string.ascii_uppercase
-    digits = string.digits
-    special = "!@#$%&*"
-    pwd = [random.choice(lower), random.choice(upper), random.choice(digits), random.choice(special)]
-    all_chars = lower + upper + digits + special
-    pwd += [random.choice(all_chars) for _ in range(length - 4)]
+def generate_password(length=16):
+    """生成符合 OpenAI 要求的随机密码"""
+    chars = string.ascii_letters + string.digits + "!@#$%"
+    pwd = list(
+        random.choice(string.ascii_uppercase)
+        + random.choice(string.ascii_lowercase)
+        + random.choice(string.digits)
+        + random.choice("!@#$%")
+        + "".join(random.choice(chars) for _ in range(length - 4))
+    )
     random.shuffle(pwd)
     return "".join(pwd)
 

@@ -26,7 +26,7 @@ from .quota import UserQuota
 from .config import Config, config
 from .schemas import CXAccountInfo
 from .log import cx_logger as logger
-from .exception import RequestException
+from .exception import RequestException, OAuthException
 from .api import OAuthClient, YYDSMailAPI, OAIRegisterAPI
 from .utils import random_name, random_birthdate, generate_password, decode_jwt_payload
 
@@ -62,8 +62,40 @@ async def _pick_domain() -> str:
     return random.choice(await YYDSMailAPI.fetch_domains()).domain
 
 
-async def _do_register() -> CXAccountInfo:
-    """执行一次完整注册流程，成功返回 CXAccountInfo，失败抛出 RequestException"""
+async def _do_oauth(address: str, password: str) -> CXAccountInfo:
+    """执行 OAuth 登录并构造账号信息，失败抛出 OAuthException。"""
+    try:
+        tokens = await OAuthClient().login(address, password)
+    except Exception as e:
+        raise OAuthException(f"OAuth 登录失败: {e}") from e
+    payload = decode_jwt_payload(tokens.access_token)
+    auth_info = payload.get("https://api.openai.com/auth", {})
+    account_id = auth_info.get("chatgpt_account_id", "")
+    now = datetime.now(tz=timezone(timedelta(hours=8)))
+    exp_timestamp = payload.get("exp")
+    expired_str = (
+        datetime.fromtimestamp(exp_timestamp, tz=timezone(timedelta(hours=8))).strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        if isinstance(exp_timestamp, int) and exp_timestamp > 0
+        else ""
+    )
+    return CXAccountInfo(
+        type="codex",
+        email=address,
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+        id_token=tokens.id_token,
+        expired=expired_str,
+        account_id=account_id,
+        last_refresh=now.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+    )
+
+
+async def _do_register(on_callback_success=None) -> CXAccountInfo:
+    """执行一次完整注册流程。
+    - callback() 之前失败：抛出 RequestException，计入连续失败计数。
+    - callback() 成功：立即调用 on_callback_success 重置连续失败计数。
+    - OAuth 步骤失败：最多重试 2 次，耗尽后抛出 OAuthException（不计入连续失败）。
+    """
     domain = await _pick_domain()
     chars = string.ascii_lowercase + string.digits
     prefix = "".join(random.choice(chars) for _ in range(random.randint(8, 13)))
@@ -94,27 +126,17 @@ async def _do_register() -> CXAccountInfo:
         await oai.create_account(name, birthdate)
         await oai.callback()
 
-    tokens = await OAuthClient().login(inbox.address, password)
-    payload = decode_jwt_payload(tokens.access_token)
-    auth_info = payload.get("https://api.openai.com/auth", {})
-    account_id = auth_info.get("chatgpt_account_id", "")
-    now = datetime.now(tz=timezone(timedelta(hours=8)))
-    exp_timestamp = payload.get("exp")
-    expired_str = (
-        datetime.fromtimestamp(exp_timestamp, tz=timezone(timedelta(hours=8))).strftime("%Y-%m-%dT%H:%M:%S+08:00")
-        if isinstance(exp_timestamp, int) and exp_timestamp > 0
-        else ""
-    )
-    return CXAccountInfo(
-        type="codex",
-        email=inbox.address,
-        access_token=tokens.access_token,
-        refresh_token=tokens.refresh_token,
-        id_token=tokens.id_token,
-        expired=expired_str,
-        account_id=account_id,
-        last_refresh=now.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
-    )
+    # callback() 成功（或路径已跳过 callback），视为注册成功，立即重置连续失败计数
+    if on_callback_success is not None:
+        await on_callback_success()
+
+    # OAuth 步骤：最多尝试 3 次（1 次 + 2 次重试），失败抛出 OAuthException 不计入连续失败计数
+    for oauth_attempt in range(1, 4):
+        try:
+            return await _do_oauth(inbox.address, password)
+        except OAuthException as e:
+            logger("WARNING", f"OAuth 登录失败(第 {oauth_attempt}/3 次): {e}")
+    raise OAuthException(f"OAuth 登录连续失败 3 次，放弃本次账号: {inbox.address}")
 
 
 def _build_file(results: list[CXAccountInfo]) -> tuple[bytes, str]:
@@ -165,6 +187,9 @@ async def _(session: Uninfo, is_superuser: bool = Depends(SuperUser())):
     except RequestException as e:
         await UniMessage.text(f"注册失败: {e}").finish()
 
+    if account is None:
+        await UniMessage.text("注册成功但 OAuth 登录失败，账号已创建但无法获取 Token").finish()
+
     await UserQuota.increment(uid)
     await UniMessage.text(f"注册成功！邮箱: {account.email}\nAccount Json:\n{account.model_dump_json()}").send()
 
@@ -193,33 +218,53 @@ async def _(bot: Bot, session: Uninfo, num: Match[str], is_superuser: bool = Dep
     results: list[CXAccountInfo] = []
     stop_event = asyncio.Event()
     results_lock = asyncio.Lock()
+    consecutive_failures = 0
 
     async def _worker(worker_id: int):
-        """持续注册直到全局目标达成或本账号耗尽重试次数"""
-        while not stop_event.is_set():
-            for attempt in range(1, max_attempts + 1):
-                if stop_event.is_set():
-                    return
-                try:
-                    account = await _do_register()
-                    async with results_lock:
-                        results.append(account)
-                        cnt = len(results)
-                        # 每次成功立即持久化配额
-                        await UserQuota.increment(uid)
-                        logger("INFO", f"[W{worker_id}] 注册成功({cnt}/{target}) attempt={attempt}: {account.email}")
-                        await UniMessage.text(f"[{cnt}/{target}] 注册成功: {account.email}").send()
-                        if cnt >= target:
-                            stop_event.set()
-                    break  # 本账号注册成功，重置计数进入下一轮
-                except RequestException as e:
-                    logger("WARNING", f"[W{worker_id}] 第 {attempt}/{max_attempts} 次失败: {e}")
-            else:
-                # 超过最大重试次数仍未成功，停止本 worker
-                logger("WARNING", f"[W{worker_id}] 已达最大尝试次数 {max_attempts}，worker 退出")
-                return
+        """持续注册直到全局目标达成，或全局连续失败次数达上限（期间无任何成功）才停止整个任务"""
+        nonlocal consecutive_failures
 
-    await asyncio.gather(*[_worker(i) for i in range(workers)])
+        async def _on_callback_success():
+            nonlocal consecutive_failures
+            async with results_lock:
+                consecutive_failures = 0
+
+        while not stop_event.is_set():
+            try:
+                account = await _do_register(on_callback_success=_on_callback_success)
+                if account is None:
+                    # OAuth 步骤失败，继续尝试下一个账号，不计入连续失败
+                    logger("ERROR", f"[W{worker_id}] 注册成功但 OAuth 登录失败，放弃本次账号")
+                    continue
+                async with results_lock:
+                    consecutive_failures = 0  # 兜底：callback 被跳过时（already-callback/chatgpt路径）仍重置
+                    results.append(account)
+                    cnt = len(results)
+                    await UserQuota.increment(uid)
+                    logger("INFO", f"[W{worker_id}] 注册成功({cnt}/{target}): {account.email}")
+                    await UniMessage.text(f"[{cnt}/{target}] 注册成功: {account.email}").send()
+                    if cnt >= target:
+                        stop_event.set()
+            except RequestException as e:
+                async with results_lock:
+                    consecutive_failures += 1
+                    cf = consecutive_failures
+                logger("WARNING", f"[W{worker_id}] 失败(连续 {cf}/{max_attempts}): {e}")
+                if cf >= max_attempts:
+                    logger("WARNING", f"连续失败已达 {max_attempts} 次，停止整个任务并输出当前结果")
+                    stop_event.set()
+                    return
+            except Exception as e:
+                logger("ERROR", f"[W{worker_id}] 未预期错误: {e}")
+                async with results_lock:
+                    consecutive_failures += 1
+                    cf = consecutive_failures
+                if cf >= max_attempts:
+                    logger("WARNING", f"连续失败已达 {max_attempts} 次，停止整个任务并输出当前结果")
+                    stop_event.set()
+                    return
+
+    await asyncio.gather(*[_worker(i) for i in range(workers)], return_exceptions=True)
 
     await UniMessage.text(f"批量注册完成！共获得 {len(results)} 个账号（目标 {target}）").send()
     if results:

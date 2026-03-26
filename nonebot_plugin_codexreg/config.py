@@ -17,9 +17,9 @@ class ScopedConfig(BaseModel):
     """注册时使用的邮箱域名白名单，优先从中选择，默认为空"""
     max_thread_workers: int = 5
     """注册最大并发数"""
-    retry_max_attempts: int = 50
+    retry_max_attempts: int = 100
     """单账户注册失败最大重试次数"""
-    reg_max_user_per_day: int = 1
+    reg_max_user_per_day: int = 10
     """用户每日注册上限"""
 
 
