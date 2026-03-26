@@ -5,8 +5,6 @@ YYDS Mail API 响应数据结构定义
 from pydantic import Field, BaseModel
 from nonebot.compat import model_validator
 
-from nonebot_plugin_codexreg.config import ScopedConfig
-
 
 class Inbox(BaseModel):
     id: str

@@ -86,7 +86,10 @@ class OAIRegisterAPI:
         build = profile["build"]
         patch = random.randint(*profile["patch_range"])
         full_ver = f"{major}.0.{build}.{patch}"
-        ua = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{full_ver} Safari/537.36"
+        ua = (
+            f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{full_ver}"
+            " Safari/537.36"
+        )
         return profile["impersonate"], major, full_ver, ua, profile["sec_ch_ua"]
 
     async def visit_homepage(self):
