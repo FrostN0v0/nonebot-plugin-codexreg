@@ -1,0 +1,58 @@
+[project]
+name = "nonebot-plugin-codexreg"
+version = "0.1.0"
+description = "Automatic registration plugin for some AI platform accounts"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "curl-cffi>=0.14.0",
+    "httpx>=0.28.1",
+    "nonebot-plugin-alconna>=0.61.0",
+    "nonebot-plugin-apscheduler>=0.5.0",
+    "nonebot-plugin-localstore>=0.7.4",
+    "nonebot-plugin-uninfo>=0.11.0",
+    "nonebot2>=2.4.4",
+]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+length_sort = true
+skip_gitignore = true
+force_sort_within_sections = true
+extra_standard_library = ["typing_extensions"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "UP", "C", "T", "PYI", "PT", "Q"]
+ignore = ["E402", "C901"]
+
+[tool.pyright]
+pythonVersion = "3.14"
+pythonPlatform = "All"
+typeCheckingMode = "standard"
+
+[build-system]
+requires = ["uv_build>=0.10.9,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.nonebot]
+plugins = ["nonebot_plugin_codexreg"]
+adapters = [
+    { name = "OneBot V11", module_name = "nonebot.adapters.onebot.v11" },
+    {name = "nonebot-adapter-milky", module_name = "nonebot.adapters.milky"}
+]
+
+[dependency-groups]
+dev = [
+    "nonebot-adapter-milky>=1.1.0",
+    "nonebot-adapter-onebot>=2.4.6",
+    "nonebot2[fastapi]>=2.4.1",
+]
+
