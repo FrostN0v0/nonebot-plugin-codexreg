@@ -9,14 +9,12 @@ from datetime import datetime, timezone, timedelta
 
 from nonebot import require
 from nonebot.params import Depends
-from nonebot.adapters.milky import Bot
 from arclet.alconna import Args, Alconna
 from nonebot.permission import SuperUser
 from nonebot.plugin import PluginMetadata, inherit_supported_adapters
 
 require("nonebot_plugin_alconna")
 require("nonebot_plugin_localstore")
-require("nonebot_plugin_apscheduler")
 require("nonebot_plugin_uninfo")
 
 from nonebot_plugin_uninfo import Uninfo
@@ -26,7 +24,7 @@ from .quota import UserQuota
 from .config import Config, config
 from .schemas import CXAccountInfo
 from .log import cx_logger as logger
-from .exception import RequestException, OAuthException
+from .exception import OAuthException, RequestException
 from .api import OAuthClient, YYDSMailAPI, OAIRegisterAPI
 from .utils import random_name, random_birthdate, generate_password, decode_jwt_payload
 
@@ -157,22 +155,11 @@ def _build_file(results: list[CXAccountInfo]) -> tuple[bytes, str]:
     return buf.getvalue(), f"codex_accounts_{ts}.zip"
 
 
-async def _send_results(bot: Bot, session: Uninfo, results: list[CXAccountInfo]) -> None:
+async def _send_results(results: list[CXAccountInfo]) -> None:
     data, filename = _build_file(results)
     file_path = Path("temp") / filename
     file_path.parent.mkdir(exist_ok=True, parents=True)
-    if session.scene.is_group:
-        await bot.upload_group_file(
-            group_id=int(session.scene.id),
-            raw=data,
-            file_name=filename,
-        )
-    else:
-        await bot.upload_private_file(
-            user_id=int(session.user.id),
-            raw=data,
-            file_name=filename,
-        )
+    await UniMessage.file(raw=data, name=filename).finish()
 
 
 @codex.assign("reg.$main")
@@ -195,7 +182,7 @@ async def _(session: Uninfo, is_superuser: bool = Depends(SuperUser())):
 
 
 @codex.assign("reg.retry")
-async def _(bot: Bot, session: Uninfo, num: Match[str], is_superuser: bool = Depends(SuperUser())):
+async def _(session: Uninfo, num: Match[str], is_superuser: bool = Depends(SuperUser())):
     """并发批量注册：max_thread_workers 个协程同时运行，每个账号最多尝试 retry_max_attempts 次"""
     uid = session.user.id
     target = int(num.result) if num.available else 1
@@ -268,4 +255,4 @@ async def _(bot: Bot, session: Uninfo, num: Match[str], is_superuser: bool = Dep
 
     await UniMessage.text(f"批量注册完成！共获得 {len(results)} 个账号（目标 {target}）").send()
     if results:
-        await _send_results(bot, session, results)
+        await _send_results(results)

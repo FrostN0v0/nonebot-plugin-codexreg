@@ -27,13 +27,6 @@ _✨ plugin-codexreg ✨_
 
 ~~注册某 AI 平台账号以增长其日活量~~
 
-> [!NOTE]
-> 目前仅实现了 milky （发文件）
->
-> 本来想用 alc 的，但目前 alc unimsg milky 的发文件有 bug，先手动 call api 发文件了
->
-> 根据你要用的适配器，改一下发送文件的实现就行了
-
 ## ⚙️ 配置
 
 请参考 [config.py](./nonebot_plugin_codexreg/config.py) 中的 `Config` 类进行配置
